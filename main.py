@@ -71,21 +71,70 @@ def remove_background_enhanced(image):
     
     return refined
 
+import numpy as np
+from PIL import Image, ImageFilter
+from rembg import remove
+
+def refine_edges(image, alpha_matting=True, alpha_matting_foreground_threshold=240,
+                 alpha_matting_background_threshold=10, alpha_matting_erode_size=10):
+    """
+    Refine edges of the extracted foreground with improved preservation of image details.
+    """
+    # Convert to numpy array for processing
+    img_array = np.array(image)
+    
+    # Split alpha channel
+    rgb = img_array[:, :, :3]
+    alpha = img_array[:, :, 3]
+    
+    # Preserve original RGB channels
+    rgb_image = Image.fromarray(rgb)
+    
+    # Refine alpha channel
+    alpha_image = Image.fromarray(alpha)
+    alpha_blurred = alpha_image.filter(ImageFilter.GaussianBlur(radius=1))  # Reduced blur radius
+    alpha_blurred = np.array(alpha_blurred)
+    
+    # Adjust alpha values more conservatively
+    alpha_blurred[alpha_blurred < 20] = 0  # Only remove very low alpha values
+    alpha_blurred[alpha_blurred > 240] = 255  # Make strong alpha values fully opaque
+    
+    # Feather edges for better blending, but with a smaller radius
+    alpha_feathered = Image.fromarray(alpha_blurred).filter(ImageFilter.GaussianBlur(radius=1))
+    
+    # Reconstruct image with original RGB and refined alpha channels
+    refined = np.dstack((np.array(rgb_image), np.array(alpha_feathered)))
+    return Image.fromarray(refined)
+
+def remove_background_enhanced(image):
+    """
+    Enhanced background removal with better preservation of image details.
+    """
+    # Initial background removal with rembg
+    no_bg = remove(
+        image,
+        alpha_matting=True,
+        alpha_matting_foreground_threshold=240,
+        alpha_matting_background_threshold=10,
+        alpha_matting_erode_size=10
+    )
+    
+    # Apply edge refinement with more conservative parameters
+    refined = refine_edges(no_bg, 
+                           alpha_matting_foreground_threshold=240,
+                           alpha_matting_background_threshold=10,
+                           alpha_matting_erode_size=5)  # Reduced erode size
+    
+    return refined
+
 def replace_background(foreground, background):
     """
-    Replace background of foreground image with enhanced edge handling.
-    
-    Args:
-        foreground (PIL.Image): Foreground image with transparent background
-        background (PIL.Image or str): Background image or color
-    
-    Returns:
-        PIL.Image: Image with replaced background
+    Replace background of foreground image with enhanced edge handling and detail preservation.
     """
     # Ensure the foreground has an alpha channel
     foreground = foreground.convert('RGBA')
     
-    # Apply additional edge refinement
+    # Apply additional edge refinement with more conservative parameters
     foreground = refine_edges(foreground)
     
     # Handle background (color or image)
@@ -101,25 +150,20 @@ def replace_background(foreground, background):
     else:
         background = Image.new('RGBA', foreground.size, (255, 255, 255, 255))
     
-    # Apply feathering to the edges
-    foreground_blur = foreground.filter(ImageFilter.GaussianBlur(radius=0.5))
+    # Apply minimal feathering to the edges
     alpha = foreground.split()[3]
-    alpha_blur = alpha.filter(ImageFilter.GaussianBlur(radius=0.5))
+    alpha_blur = alpha.filter(ImageFilter.GaussianBlur(radius=0.5))  # Reduced blur radius
     foreground.putalpha(alpha_blur)
     
     # Combine the foreground and background
     result = Image.alpha_composite(background, foreground)
     
     return result
-
 # Flask API Setup
 app = Flask(__name__)
 
 @app.route('/remove-background', methods=['POST'])
 def remove_background_api():
-    """
-    API endpoint for background removal and replacement with enhanced edge handling.
-    """
     if 'image' not in request.files:
         return 'No image uploaded', 400
     
@@ -127,8 +171,12 @@ def remove_background_api():
     image_file = request.files['image']
     image = Image.open(image_file)
     
-    # Remove background with enhanced edge handling
+    # Get edge refinement intensity (default to 1.0 if not provided)
+    edge_refinement_intensity = float(request.form.get('edge_refinement_intensity', 1.0))
+    
+    # Remove background with enhanced edge handling and custom intensity
     no_bg_image = remove_background_enhanced(image)
+    no_bg_image = refine_edges(no_bg_image, alpha_matting_erode_size=int(5 * edge_refinement_intensity))
     
     # Handle background replacement
     result = no_bg_image
@@ -152,6 +200,5 @@ def remove_background_api():
     img_byte_arr.seek(0)
     
     return send_file(img_byte_arr, mimetype='image/png')
-
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001)
