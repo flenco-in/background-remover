@@ -1,116 +1,37 @@
 import os
 import io
-import numpy as np
 from flask import Flask, request, send_file
 from rembg import remove
 from PIL import Image, ImageColor, ImageOps, ImageFilter
-
-def refine_edges(image, alpha_matting=True, alpha_matting_foreground_threshold=240,
-                 alpha_matting_background_threshold=10, alpha_matting_erode_size=10):
-    """
-    Refine edges of the extracted foreground using multiple techniques.
-    
-    Args:
-        image (PIL.Image): Input image with transparency
-        alpha_matting: Whether to use alpha matting
-        alpha_matting_foreground_threshold: Threshold for foreground in alpha matting
-        alpha_matting_background_threshold: Threshold for background in alpha matting
-        alpha_matting_erode_size: Size of erosion in alpha matting
-    
-    Returns:
-        PIL.Image: Image with refined edges
-    """
-    # Convert to numpy array for processing
-    img_array = np.array(image)
-    
-    # Split alpha channel
-    rgb = img_array[:, :, :3]
-    alpha = img_array[:, :, 3]
-    
-    # Smooth RGB channels with a bilateral filter for edge-preserving blur
-    rgb_image = Image.fromarray(rgb)
-    rgb_smoothed = rgb_image.filter(ImageFilter.GaussianBlur(radius=1.5))  # Slightly stronger blur for smoother transitions
-    
-    # Refine alpha channel
-    alpha_image = Image.fromarray(alpha)
-    alpha_blurred = alpha_image.filter(ImageFilter.GaussianBlur(radius=2.5))  # More aggressive blur on alpha channel
-    alpha_blurred = np.array(alpha_blurred)
-    
-    # Remove weak alpha values (transparency cleanup)
-    alpha_blurred[alpha_blurred < 30] = 0  # Threshold to remove very low alpha values
-    alpha_blurred[alpha_blurred > 230] = 255  # Make strong alpha values fully opaque
-    
-    # Feather edges for better blending
-    alpha_feathered = Image.fromarray(alpha_blurred).filter(ImageFilter.GaussianBlur(radius=2))  # Final softening pass
-    
-    # Reconstruct image with smoothed RGB and alpha channels
-    refined = np.dstack((np.array(rgb_smoothed), np.array(alpha_feathered)))
-    return Image.fromarray(refined)
-
-def remove_background_enhanced(image):
-    """
-    Enhanced background removal with better edge handling.
-    
-    Args:
-        image (PIL.Image): Input image
-    
-    Returns:
-        PIL.Image: Image with background removed and refined edges
-    """
-    # Initial background removal with rembg
-    no_bg = remove(
-        image,
-        alpha_matting=True,
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=10,
-        alpha_matting_erode_size=10
-    )
-    
-    # Apply edge refinement
-    refined = refine_edges(no_bg)
-    
-    return refined
-
 import numpy as np
-from PIL import Image, ImageFilter
-from rembg import remove
 
-def refine_edges(image, alpha_matting=True, alpha_matting_foreground_threshold=240,
-                 alpha_matting_background_threshold=10, alpha_matting_erode_size=10):
+app = Flask(__name__)
+
+def refine_edges(image, alpha_matting_foreground_threshold=240, 
+                 alpha_matting_background_threshold=10, alpha_matting_erode_size=5):
     """
-    Refine edges of the extracted foreground with improved preservation of image details.
+    Refine edges of the extracted foreground with improved preservation of details.
     """
-    # Convert to numpy array for processing
     img_array = np.array(image)
-    
-    # Split alpha channel
     rgb = img_array[:, :, :3]
     alpha = img_array[:, :, 3]
     
-    # Preserve original RGB channels
-    rgb_image = Image.fromarray(rgb)
-    
     # Refine alpha channel
     alpha_image = Image.fromarray(alpha)
-    alpha_blurred = alpha_image.filter(ImageFilter.GaussianBlur(radius=1))  # Reduced blur radius
+    alpha_blurred = alpha_image.filter(ImageFilter.GaussianBlur(radius=1))
     alpha_blurred = np.array(alpha_blurred)
-    
-    # Adjust alpha values more conservatively
-    alpha_blurred[alpha_blurred < 20] = 0  # Only remove very low alpha values
-    alpha_blurred[alpha_blurred > 240] = 255  # Make strong alpha values fully opaque
-    
-    # Feather edges for better blending, but with a smaller radius
+    alpha_blurred[alpha_blurred < 20] = 0
+    alpha_blurred[alpha_blurred > 240] = 255
     alpha_feathered = Image.fromarray(alpha_blurred).filter(ImageFilter.GaussianBlur(radius=1))
     
-    # Reconstruct image with original RGB and refined alpha channels
-    refined = np.dstack((np.array(rgb_image), np.array(alpha_feathered)))
+    # Combine refined alpha with original RGB
+    refined = np.dstack((rgb, np.array(alpha_feathered)))
     return Image.fromarray(refined)
 
 def remove_background_enhanced(image):
     """
-    Enhanced background removal with better preservation of image details.
+    Remove the background with edge refinement.
     """
-    # Initial background removal with rembg
     no_bg = remove(
         image,
         alpha_matting=True,
@@ -118,26 +39,53 @@ def remove_background_enhanced(image):
         alpha_matting_background_threshold=10,
         alpha_matting_erode_size=10
     )
+    return refine_edges(no_bg)
+
+def add_shadow(image, offset=(20, 20), blur_radius=30, shadow_color=(0, 0, 0, 120)):
+    """
+    Add a soft, realistic shadow behind the image.
     
-    # Apply edge refinement with more conservative parameters
-    refined = refine_edges(no_bg, 
-                           alpha_matting_foreground_threshold=240,
-                           alpha_matting_background_threshold=10,
-                           alpha_matting_erode_size=5)  # Reduced erode size
+    Args:
+    - image: PIL Image object.
+    - offset: Tuple (x, y) for shadow offset.
+    - blur_radius: Blur radius to soften shadow edges.
+    - shadow_color: RGBA color of the shadow.
     
-    return refined
+    Returns:
+    - Image with shadow effect applied.
+    """
+    # Ensure image has alpha channel
+    image = image.convert("RGBA")
+    width, height = image.size
+
+    # Create a base shadow layer
+    shadow_layer = Image.new("RGBA", (width + abs(offset[0]), height + abs(offset[1])), (0, 0, 0, 0))
+    
+    # Create a shadow from the alpha channel of the image
+    alpha = image.split()[3]
+    shadow = Image.new("RGBA", (width, height), shadow_color)
+    
+    # Paste shadow at the original position with the alpha mask
+    shadow_layer.paste(shadow, (max(offset[0], 0), max(offset[1], 0)), mask=alpha)
+    
+    # Apply blur to create soft shadow edges
+    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(blur_radius))
+    
+    # Composite the shadow and the original image
+    final_image = Image.new("RGBA", shadow_layer.size, (0, 0, 0, 0))
+    final_image.paste(shadow_layer, (0, 0))
+    final_image.paste(image, (max(-offset[0], 0), max(-offset[1], 0)), mask=image.split()[3])
+    
+    return final_image
 
 def replace_background(foreground, background):
     """
-    Replace background of foreground image with enhanced edge handling and detail preservation.
+    Replace background of an image with optional shadow addition.
     """
     # Ensure the foreground has an alpha channel
     foreground = foreground.convert('RGBA')
     
-    # Apply additional edge refinement with more conservative parameters
-    foreground = refine_edges(foreground)
-    
-    # Handle background (color or image)
+    # Handle background
     if isinstance(background, Image.Image):
         background = background.convert('RGBA')
         background = ImageOps.fit(background, foreground.size, method=Image.Resampling.LANCZOS)
@@ -150,35 +98,34 @@ def replace_background(foreground, background):
     else:
         background = Image.new('RGBA', foreground.size, (255, 255, 255, 255))
     
-    # Apply minimal feathering to the edges
-    alpha = foreground.split()[3]
-    alpha_blur = alpha.filter(ImageFilter.GaussianBlur(radius=0.5))  # Reduced blur radius
-    foreground.putalpha(alpha_blur)
-    
-    # Combine the foreground and background
+    # Combine foreground and background
     result = Image.alpha_composite(background, foreground)
-    
     return result
-# Flask API Setup
-app = Flask(__name__)
 
 @app.route('/remove-background', methods=['POST'])
 def remove_background_api():
     if 'image' not in request.files:
         return 'No image uploaded', 400
     
-    # Process the input image
+    # Process input image
     image_file = request.files['image']
     image = Image.open(image_file)
     
-    # Get edge refinement intensity (default to 1.0 if not provided)
-    edge_refinement_intensity = float(request.form.get('edge_refinement_intensity', 1.0))
+    # Shadow parameters
+    add_shadow_flag = request.form.get('add_shadow', 'false').lower() == 'true'
+    shadow_offset = tuple(map(int, request.form.get('shadow_offset', '20,20').split(',')))
+    shadow_blur = int(request.form.get('shadow_blur', 30))
+    shadow_color = request.form.get('shadow_color', '0,0,0,120').split(',')
+    shadow_color = tuple(map(int, shadow_color))
     
-    # Remove background with enhanced edge handling and custom intensity
+    # Remove background
     no_bg_image = remove_background_enhanced(image)
-    no_bg_image = refine_edges(no_bg_image, alpha_matting_erode_size=int(5 * edge_refinement_intensity))
     
-    # Handle background replacement
+    # Apply shadow if requested
+    if add_shadow_flag:
+        no_bg_image = add_shadow(no_bg_image, offset=shadow_offset, blur_radius=shadow_blur, shadow_color=shadow_color)
+    
+    # Handle background replacement (optional)
     result = no_bg_image
     if 'background_image' in request.files:
         try:
@@ -194,11 +141,12 @@ def remove_background_api():
         except Exception as e:
             return f'Error processing background color: {str(e)}', 400
     
-    # Save the result to a byte stream
+    # Save result to a byte stream
     img_byte_arr = io.BytesIO()
     result.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
     
     return send_file(img_byte_arr, mimetype='image/png')
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001)
