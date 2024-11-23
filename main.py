@@ -27,20 +27,24 @@ def refine_edges(image, alpha_matting=True, alpha_matting_foreground_threshold=2
     rgb = img_array[:, :, :3]
     alpha = img_array[:, :, 3]
     
-    # Apply bilateral filter to reduce noise while preserving edges
-    filtered = Image.fromarray(rgb).filter(ImageFilter.SMOOTH_MORE)
-    rgb = np.array(filtered)
+    # Smooth RGB channels with a bilateral filter for edge-preserving blur
+    rgb_image = Image.fromarray(rgb)
+    rgb_smoothed = rgb_image.filter(ImageFilter.GaussianBlur(radius=1.5))  # Slightly stronger blur for smoother transitions
     
-    # Edge smoothing
-    alpha = Image.fromarray(alpha).filter(ImageFilter.GaussianBlur(radius=0.5))
-    alpha = np.array(alpha)
+    # Refine alpha channel
+    alpha_image = Image.fromarray(alpha)
+    alpha_blurred = alpha_image.filter(ImageFilter.GaussianBlur(radius=2.5))  # More aggressive blur on alpha channel
+    alpha_blurred = np.array(alpha_blurred)
     
-    # Remove any remaining artifacts
-    alpha[alpha < 25] = 0  # Remove very transparent pixels
-    alpha[alpha > 235] = 255  # Make strong pixels fully opaque
+    # Remove weak alpha values (transparency cleanup)
+    alpha_blurred[alpha_blurred < 30] = 0  # Threshold to remove very low alpha values
+    alpha_blurred[alpha_blurred > 230] = 255  # Make strong alpha values fully opaque
     
-    # Reconstruct image
-    refined = np.dstack((rgb, alpha))
+    # Feather edges for better blending
+    alpha_feathered = Image.fromarray(alpha_blurred).filter(ImageFilter.GaussianBlur(radius=2))  # Final softening pass
+    
+    # Reconstruct image with smoothed RGB and alpha channels
+    refined = np.dstack((np.array(rgb_smoothed), np.array(alpha_feathered)))
     return Image.fromarray(refined)
 
 def remove_background_enhanced(image):
