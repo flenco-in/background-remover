@@ -1,0 +1,31 @@
+# Flask for API server
+Flask==3.0.0
+
+# Pillow for image processing
+Pillow==10.1.0
+
+# rembg for background removal
+rembg==2.0.50
+
+# Selenium and related packages for web automation
+selenium==4.16.0
+webdriver-manager==4.0.1
+
+# NumPy for array operations (used by background removal)
+numpy==1.26.3
+
+# Image processing dependencies (required by rembg)
+opencv-python-headless==4.8.1.78
+torch==2.1.2
+torchvision==0.16.2
+
+# Additional dependencies for background removal model
+onnxruntime==1.16.3
+pooch==1.8.0
+
+# Server dependencies
+Werkzeug==3.0.1
+gunicorn==21.2.0  # For production deployment
+
+# Optional: Development tools
+python-dotenv==1.0.0  # For environment variables management
