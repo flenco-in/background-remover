@@ -26,7 +26,11 @@ def install_chrome_dependencies():
     """
     try:
         # Update package list
-        subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+        try:
+            subprocess.run(['apt-get', 'update'], check=True)
+        except subprocess.CalledProcessError:
+            # If regular apt-get fails, try with sudo
+            subprocess.run(['sudo', 'apt-get', 'update'], check=True)
         
         # Install dependencies
         dependencies = [
@@ -35,10 +39,17 @@ def install_chrome_dependencies():
             'chromium-browser',
             'chromium-chromedriver',
             'xvfb',  # Virtual display
-            'libgconf-2-4',  # Required dependency
+            'libnss3',
+            'libgbm1',  # Required for Chromium
+            'libasound2'  # Required for Chromium
         ]
         
-        subprocess.run(['sudo', 'apt-get', 'install', '-y'] + dependencies, check=True)
+        try:
+            # First try without sudo
+            subprocess.run(['apt-get', 'install', '-y'] + dependencies, check=True)
+        except subprocess.CalledProcessError:
+            # If that fails, try with sudo
+            subprocess.run(['sudo', 'apt-get', 'install', '-y'] + dependencies, check=True)
         logger.info("Successfully installed Chrome dependencies")
         
     except subprocess.CalledProcessError as e:
