@@ -71,14 +71,37 @@ class BackgroundRemovalHandler:
         return send_file(img_byte_arr, mimetype='image/png')
     
 
+from flask import request, jsonify
+from selenium_utils import get_generated_image_url, initialize_server
+
 class ImageGenerationHandler:
-    @staticmethod
-    def handle_request():
-        """Simplified handler with minimal overhead."""
-        if not request.json or 'prompt' not in request.json:
-            return jsonify({'error': 'No prompt provided'}), 400
-        
-        url = get_generated_image_url(request.json['prompt'])
-        if url:
-            return jsonify({'success': True, 'image_url': url})
-        return jsonify({'success': False, 'error': 'Failed to generate image'}), 500
+    @classmethod
+    def handle_request(cls):
+        """
+        Handle the Flask request for image generation
+        """
+        try:
+            data = request.get_json()
+            
+            if not data or 'prompt' not in data:
+                return jsonify({
+                    'error': 'Missing prompt in request body'
+                }), 400
+
+            prompt = data['prompt']
+            image_url = get_generated_image_url(prompt)
+
+            if not image_url:
+                return jsonify({
+                    'error': 'Failed to generate image'
+                }), 500
+
+            return jsonify({
+                'success': True,
+                'image_url': image_url
+            }), 200
+
+        except Exception as e:
+            return jsonify({
+                'error': str(e)
+            }), 500
