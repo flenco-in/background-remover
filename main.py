@@ -1,13 +1,8 @@
 # main.py
 from flask import Flask
 from handlers import BackgroundRemovalHandler, ImageGenerationHandler
-from selenium_utils import initialize_server
 
 app = Flask(__name__)
-
-
-# Initialize server requirements
-initialize_server()
 
 @app.route('/remove-background', methods=['POST'])
 def remove_background_api():

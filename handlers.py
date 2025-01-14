@@ -5,6 +5,10 @@ from utils import ImageProcessor
 
 from flask import request, jsonify
 from selenium_utils import get_generated_image_url
+from selenium_utils import SeleniumImageGenerator
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BackgroundRemovalHandler:
     @staticmethod
@@ -71,37 +75,32 @@ class BackgroundRemovalHandler:
         return send_file(img_byte_arr, mimetype='image/png')
     
 
-from flask import request, jsonify
-from selenium_utils import get_generated_image_url, initialize_server
-
 class ImageGenerationHandler:
-    @classmethod
-    def handle_request(cls):
-        """
-        Handle the Flask request for image generation
-        """
+    @staticmethod
+    def handle_request():
         try:
+            # Get the prompt from the request
             data = request.get_json()
-            
             if not data or 'prompt' not in data:
-                return jsonify({
-                    'error': 'Missing prompt in request body'
-                }), 400
-
+                return jsonify({'error': 'No prompt provided'}), 400
+            
             prompt = data['prompt']
-            image_url = get_generated_image_url(prompt)
-
+            
+            # Initialize the image generator
+            generator = SeleniumImageGenerator()
+            
+            # Generate the image
+            image_url = generator.generate_image(prompt)
+            
             if not image_url:
-                return jsonify({
-                    'error': 'Failed to generate image'
-                }), 500
-
+                return jsonify({'error': 'Failed to generate image'}), 500
+                
+            # Return the image URL
             return jsonify({
-                'success': True,
+                'status': 'success',
                 'image_url': image_url
-            }), 200
-
+            })
+            
         except Exception as e:
-            return jsonify({
-                'error': str(e)
-            }), 500
+            logger.error(f"Error in image generation handler: {str(e)}")
+            return jsonify({'error': str(e)}), 500

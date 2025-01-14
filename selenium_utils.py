@@ -1,8 +1,6 @@
+# selenium_utils.py
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -10,8 +8,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import time
 import logging
-import os
-import subprocess
+from typing import Optional
 
 # Set up logging
 logging.basicConfig(
@@ -20,60 +17,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def install_chrome_dependencies():
+class SeleniumImageGenerator:
     """
-    Install Chrome and its dependencies on Ubuntu
+    A class to handle Selenium-based image generation using DeepAI's text2img model
     """
-    try:
-        # Update package list
-        try:
-            subprocess.run(['apt-get', 'update'], check=True)
-        except subprocess.CalledProcessError:
-            # If regular apt-get fails, try with sudo
-            subprocess.run(['sudo', 'apt-get', 'update'], check=True)
-        
-        # Install dependencies
-        dependencies = [
-            'wget',
-            'unzip',
-            'chromium-browser',
-            'chromium-chromedriver',
-            'xvfb',  # Virtual display
-            'libnss3',
-            'libgbm1',  # Required for Chromium
-            'libasound2'  # Required for Chromium
-        ]
-        
-        try:
-            # First try without sudo
-            subprocess.run(['apt-get', 'install', '-y'] + dependencies, check=True)
-        except subprocess.CalledProcessError:
-            # If that fails, try with sudo
-            subprocess.run(['sudo', 'apt-get', 'install', '-y'] + dependencies, check=True)
-        logger.info("Successfully installed Chrome dependencies")
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to install dependencies: {str(e)}")
-        raise
+    def __init__(self):
+        self.driver = None
+        self.wait = None
 
-def setup_virtual_display():
-    """
-    Set up virtual display for headless browsing
-    """
-    try:
-        os.environ['DISPLAY'] = ':99'
-        subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1920x1080x24', '-ac'])
-        time.sleep(2)  # Wait for virtual display to start
-        logger.info("Virtual display started successfully")
-    except Exception as e:
-        logger.error(f"Failed to start virtual display: {str(e)}")
-        raise
-
-def setup_driver():
-    """
-    Configure and return Chrome WebDriver with optimized settings for Ubuntu server
-    """
-    try:
+    def setup_driver(self) -> None:
+        """
+        Configure Chrome WebDriver with optimized settings
+        """
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
@@ -85,156 +40,166 @@ def setup_driver():
         chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--remote-debugging-port=9222")
-        
-        # Use ChromeDriverManager to handle driver installation
-        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
-        
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(30)
-        return driver
-        
-    except WebDriverException as e:
-        logger.error(f"Failed to initialize Chrome driver: {str(e)}")
-        raise
 
-def wait_for_image_src(driver, locator):
-    """
-    Custom wait condition for checking if image source is available
-    """
-    try:
-        element = driver.find_element(*locator)
-        src = element.get_attribute("src")
-        return element if src and "api.deepai.org" in src else False
-    except:
+        try:
+            self.driver = webdriver.Chrome(options=chrome_options)
+            self.driver.set_page_load_timeout(30)
+            self.wait = WebDriverWait(self.driver, 30)
+        except WebDriverException as e:
+            logger.error(f"Failed to initialize Chrome driver: {str(e)}")
+            raise
+
+    def cleanup(self) -> None:
+        """
+        Clean up Selenium driver
+        """
+        if self.driver:
+            try:
+                self.driver.quit()
+            except:
+                pass
+            finally:
+                self.driver = None
+                self.wait = None
+
+    def handle_cookie_popup(self) -> None:
+        """
+        Handle any cookie consent popup that might appear
+        """
+        try:
+            cookie_buttons = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Accept') or contains(text(), 'I agree')]")
+            for button in cookie_buttons:
+                if button.is_displayed():
+                    button.click()
+                    time.sleep(1)
+                    break
+        except Exception as e:
+            logger.debug(f"Cookie popup handling failed: {str(e)}")
+
+    def remove_overlays(self) -> None:
+        """
+        Remove any overlay elements that might interfere with clicking
+        """
+        overlay_elements = [
+            "fs-sticky-footer",
+            "cookie-banner",
+            "ad-overlay"
+        ]
+
+        for element_id in overlay_elements:
+            try:
+                element = self.driver.find_element(By.ID, element_id)
+                self.driver.execute_script("arguments[0].remove();", element)
+            except:
+                continue
+
+    def safe_click(self, element) -> bool:
+        """
+        Try multiple methods to click an element
+        """
+        methods = [
+            lambda: element.click(),
+            lambda: ActionChains(self.driver).move_to_element(element).click().perform(),
+            lambda: self.driver.execute_script("arguments[0].click();", element),
+            lambda: self.driver.execute_script(
+                "arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));", 
+                element
+            )
+        ]
+
+        for method in methods:
+            try:
+                method()
+                return True
+            except Exception as e:
+                logger.debug(f"Click method failed: {str(e)}")
+                continue
         return False
 
-def handle_cookie_popup(driver):
-    """
-    Handle any cookie consent popup that might appear
-    """
-    try:
-        cookie_buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Accept') or contains(text(), 'I agree')]")
-        for button in cookie_buttons:
-            if button.is_displayed():
-                button.click()
-                time.sleep(1)
-                break
-    except:
-        pass
-
-def remove_overlays(driver):
-    """
-    Remove any overlay elements that might interfere with clicking
-    """
-    overlay_elements = [
-        "fs-sticky-footer",
-        "cookie-banner",
-        "ad-overlay"
-    ]
-
-    for element_id in overlay_elements:
+    def wait_for_image_src(self, element):
+        """
+        Check if image source is available and valid
+        """
         try:
-            element = driver.find_element(By.ID, element_id)
-            driver.execute_script("arguments[0].remove();", element)
+            src = element.get_attribute("src")
+            return element if src and "api.deepai.org" in src else False
         except:
-            continue
+            return False
 
-def safe_click(driver, element):
-    """
-    Try multiple methods to click an element
-    """
-    methods = [
-        lambda: element.click(),
-        lambda: ActionChains(driver).move_to_element(element).click().perform(),
-        lambda: driver.execute_script("arguments[0].click();", element),
-        lambda: driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));", element)
-    ]
+    def generate_image(self, prompt: str, max_retries: int = 3) -> Optional[str]:
+        """
+        Generate image from text prompt and return the image URL
+        
+        Args:
+            prompt (str): The text prompt for image generation
+            max_retries (int): Maximum number of retry attempts
+            
+        Returns:
+            Optional[str]: The generated image URL or None if generation fails
+        """
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                self.setup_driver()
+                
+                # Load the page
+                logger.info("Loading website...")
+                self.driver.get("https://deepai.org/machine-learning-model/text2img")
+                time.sleep(2)
 
-    for method in methods:
-        try:
-            method()
-            return True
-        except Exception as e:
-            logger.debug(f"Click method failed: {str(e)}")
-            continue
-    return False
+                # Handle any popups and overlays
+                self.handle_cookie_popup()
+                self.remove_overlays()
 
-def get_generated_image_url(prompt, max_retries=3):
-    """
-    Generate image from text prompt and return the image URL
-    """
-    driver = None
-    retry_count = 0
+                # Enter prompt
+                logger.info(f"Entering prompt: {prompt}")
+                input_field = self.wait.until(EC.presence_of_element_located(
+                    (By.CLASS_NAME, "model-input-text-input")))
+                input_field.clear()
+                input_field.send_keys(prompt)
 
-    while retry_count < max_retries:
-        try:
-            driver = setup_driver()
-            wait = WebDriverWait(driver, 30)
+                # Find and click submit button
+                logger.info("Attempting to click submit button...")
+                submit_button = self.wait.until(EC.presence_of_element_located(
+                    (By.ID, "modelSubmitButton")))
 
-            # Load the page
-            logger.info("Loading website...")
-            driver.get("https://deepai.org/machine-learning-model/text2img")
-            time.sleep(2)  # Allow page to stabilize
+                # Scroll button into view
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
+                    submit_button
+                )
+                time.sleep(1)
 
-            # Handle any popups and overlays
-            handle_cookie_popup(driver)
-            remove_overlays(driver)
+                if not self.safe_click(submit_button):
+                    raise Exception("Failed to click submit button using all methods")
 
-            # Enter prompt
-            logger.info(f"Entering prompt: {prompt}")
-            input_field = wait.until(EC.presence_of_element_located(
-                (By.CLASS_NAME, "model-input-text-input")))
-            input_field.clear()
-            input_field.send_keys(prompt)
+                # Wait for image generation
+                logger.info("Waiting for image generation...")
+                img_element = self.wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".try-it-result-area img"))
+                )
+                
+                if not self.wait_for_image_src(img_element):
+                    raise Exception("Image source not available")
 
-            # Find and click submit button
-            logger.info("Attempting to click submit button...")
-            submit_button = wait.until(EC.presence_of_element_located(
-                (By.ID, "modelSubmitButton")))
+                # Get and verify image URL
+                image_url = img_element.get_attribute("src")
+                if not image_url or "api.deepai.org" not in image_url:
+                    raise Exception("Invalid image URL generated")
 
-            # Scroll button into view
-            driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", submit_button)
-            time.sleep(1)
+                logger.info("Successfully generated image")
+                return image_url
 
-            if not safe_click(driver, submit_button):
-                raise Exception("Failed to click submit button using all methods")
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"Attempt {retry_count} failed: {str(e)}")
+                if retry_count >= max_retries:
+                    logger.error("Max retries reached")
+                    return None
+                time.sleep(2)
 
-            # Wait for image generation
-            logger.info("Waiting for image generation...")
-            img_element = wait.until(lambda d: wait_for_image_src(d, (By.CSS_SELECTOR, ".try-it-result-area img")))
+            finally:
+                self.cleanup()
 
-            # Get and verify image URL
-            image_url = img_element.get_attribute("src")
-            if not image_url or "api.deepai.org" not in image_url:
-                raise Exception("Invalid image URL generated")
-
-            logger.info("Successfully generated image")
-            return image_url
-
-        except Exception as e:
-            retry_count += 1
-            logger.error(f"Attempt {retry_count} failed: {str(e)}")
-            if retry_count >= max_retries:
-                logger.error("Max retries reached")
-                return None
-            time.sleep(2)  # Wait before retrying
-
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except:
-                    pass
-
-def initialize_server():
-    """
-    Initialize server requirements
-    """
-    try:
-        install_chrome_dependencies()
-        setup_virtual_display()
-        logger.info("Server initialization completed successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize server: {str(e)}")
-        raise
+        return None
