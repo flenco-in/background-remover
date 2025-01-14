@@ -73,8 +73,8 @@ class ChromeDriverSingleton:
     def _create_driver(cls):
         chrome_options = Options()
         
-        # Enhanced server-specific Chrome options
-        chrome_options.add_argument("--headless")
+        # Enhanced server-specific Chrome options with fixed DevTools connection
+        chrome_options.add_argument("--headless=chrome")  # Use Chrome-specific headless mode
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -83,13 +83,15 @@ class ChromeDriverSingleton:
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--remote-debugging-port=0")
+        chrome_options.add_argument("--remote-debugging-address=0.0.0.0")  # Allow remote debugging from any IP
+        chrome_options.add_argument("--remote-debugging-port=9222")  # Use fixed debugging port
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--disable-setuid-sandbox")
-        chrome_options.add_argument("--disable-web-security")
-        chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
-        chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.264 Safari/537.36")
+        
+        # DevTools specific settings
+        chrome_options.add_experimental_option('w3c', True)  # Enable W3C compliance
+        chrome_options.add_experimental_option("debuggerAddress", "0.0.0.0:9222")
         
         # Memory optimization
         chrome_options.add_argument("--memory-pressure-off")
@@ -119,10 +121,23 @@ class ChromeDriverSingleton:
             driver.set_script_timeout(30)
             driver.set_page_load_timeout(30)
             
-            # Performance optimizations
-            driver.execute_cdp_cmd("Network.enable", {})
-            driver.execute_cdp_cmd("Network.setBypassServiceWorker", {"bypass": True})
-            driver.execute_cdp_cmd('Network.setCacheDisabled', {'cacheDisabled': True})
+            # Ensure DevTools connection is established
+            try:
+                driver.execute_cdp_cmd("Runtime.enable", {})
+                driver.execute_cdp_cmd("Network.enable", {})
+                driver.execute_cdp_cmd("Page.enable", {})
+                
+                # Set up performance optimizations
+                driver.execute_cdp_cmd("Network.setBypassServiceWorker", {"bypass": True})
+                driver.execute_cdp_cmd('Network.setCacheDisabled', {'cacheDisabled': True})
+                
+                # Verify connection is working
+                driver.execute_script('return navigator.userAgent;')
+            except Exception as e:
+                logger.warning(f"DevTools connection setup failed: {str(e)}")
+                # Try to reconnect if initial connection fails
+                time.sleep(2)
+                driver.execute_cdp_cmd("Runtime.enable", {})
             
             return driver
             
