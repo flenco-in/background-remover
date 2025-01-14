@@ -1,140 +1,272 @@
+from flask import request, jsonify
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-import logging
-import atexit
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import TimeoutException, WebDriverException
 import time
+import logging
 import os
-import signal
-import psutil
+import subprocess
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-def kill_chrome_processes():
-    """Kill any existing Chrome processes"""
-    try:
-        for proc in psutil.process_iter(['name']):
-            if proc.info['name'] and ('chrome' in proc.info['name'].lower()):
-                try:
-                    os.kill(proc.pid, signal.SIGKILL)
-                except:
-                    pass
-    except:
-        pass
-
-def create_driver():
-    """Create a new Chrome driver instance"""
-    kill_chrome_processes()  # Clean up before creating new instance
-    
-    chrome_options = Options()
-    
-    # Basic settings
-    chrome_options.add_argument('--headless=new')  # Using new headless mode
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    
-    # Memory optimization
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-popup-blocking')
-    chrome_options.add_argument('--window-size=1200,900')
-    
-    # DevTools stability
-    chrome_options.add_argument('--remote-debugging-port=9222')
-    chrome_options.add_argument('--no-startup-window')
-    chrome_options.add_argument('--enable-logging')
-    chrome_options.add_argument('--v=1')
-    
-    # Additional stability options
-    chrome_options.add_argument('--disable-background-networking')
-    chrome_options.add_argument('--disable-default-apps')
-    chrome_options.add_argument('--disable-sync')
-    chrome_options.add_argument('--disable-translate')
-    chrome_options.add_argument('--metrics-recording-only')
-    chrome_options.add_argument('--mute-audio')
-    chrome_options.add_argument('--no-first-run')
-    
-    try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(30)
-        return driver
-    except Exception as e:
-        logger.error(f"Failed to create Chrome driver: {str(e)}")
-        raise
-
-def get_generated_image_url(prompt, max_retries=3):
-    """Generate image from text prompt"""
-    for attempt in range(max_retries):
-        driver = None
+class ImageGenerationHandler:
+    @staticmethod
+    def install_chrome_dependencies():
+        """
+        Install Chrome and its dependencies on Ubuntu
+        """
         try:
-            driver = create_driver()
-            logger.info("Chrome driver created successfully")
+            # Update package list
+            subprocess.run(['sudo', 'apt-get', 'update'], check=True)
             
-            # Load page
-            logger.info("Loading webpage...")
-            driver.get("https://deepai.org/machine-learning-model/text2img")
-            time.sleep(2)  # Allow page to stabilize
+            # Install dependencies
+            dependencies = [
+                'wget',
+                'unzip',
+                'chromium-browser',
+                'chromium-chromedriver',
+                'xvfb',  # Virtual display
+                'libgconf-2-4',  # Required dependency
+            ]
             
-            # Find and fill input
-            logger.info("Entering prompt...")
-            input_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, "model-input-text-input"))
-            )
+            subprocess.run(['sudo', 'apt-get', 'install', '-y'] + dependencies, check=True)
+            logger.info("Successfully installed Chrome dependencies")
             
-            # Use JavaScript to set value and trigger input event
-            driver.execute_script("""
-                arguments[0].value = arguments[1];
-                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
-            """, input_field, prompt)
-            
-            # Wait a moment for input to be registered
-            time.sleep(1)
-            
-            # Click submit using JavaScript
-            logger.info("Submitting prompt...")
-            driver.execute_script("""
-                const button = document.getElementById('modelSubmitButton');
-                if (button) button.click();
-            """)
-            
-            # Wait for result with timeout
-            logger.info("Waiting for image generation...")
-            start_time = time.time()
-            while time.time() - start_time < 30:
-                try:
-                    url = driver.execute_script("""
-                        const img = document.querySelector('.try-it-result-area img');
-                        return img && img.src && img.src.includes('api.deepai.org') ? img.src : null;
-                    """)
-                    if url:
-                        logger.info("Image URL generated successfully")
-                        return url
-                except:
-                    pass
-                time.sleep(0.5)
-            
-            raise Exception("Timeout waiting for image generation")
-            
-        except Exception as e:
-            logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
-            if attempt == max_retries - 1:
-                raise Exception("Failed to generate image after all retries")
-            time.sleep(2)
-            
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except:
-                    pass
-            kill_chrome_processes()
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to install dependencies: {str(e)}")
+            raise
 
-# Register cleanup on exit
-atexit.register(kill_chrome_processes)
+    @staticmethod
+    def setup_virtual_display():
+        """
+        Set up virtual display for headless browsing
+        """
+        try:
+            os.environ['DISPLAY'] = ':99'
+            subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1920x1080x24', '-ac'])
+            time.sleep(2)  # Wait for virtual display to start
+            logger.info("Virtual display started successfully")
+        except Exception as e:
+            logger.error(f"Failed to start virtual display: {str(e)}")
+            raise
+
+    @staticmethod
+    def setup_driver():
+        """
+        Configure and return Chrome WebDriver with optimized settings for Ubuntu server
+        """
+        try:
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-software-rasterizer")
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--start-maximized")
+            chrome_options.add_argument("--disable-notifications")
+            chrome_options.add_argument("--disable-popup-blocking")
+            chrome_options.add_argument("--remote-debugging-port=9222")
+            
+            # Use ChromeDriverManager to handle driver installation
+            service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+            
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.set_page_load_timeout(30)
+            return driver
+            
+        except WebDriverException as e:
+            logger.error(f"Failed to initialize Chrome driver: {str(e)}")
+            raise
+
+    @staticmethod
+    def wait_for_image_src(driver, locator):
+        """
+        Custom wait condition for checking if image source is available
+        """
+        try:
+            element = driver.find_element(*locator)
+            src = element.get_attribute("src")
+            return element if src and "api.deepai.org" in src else False
+        except:
+            return False
+
+    @staticmethod
+    def handle_cookie_popup(driver):
+        """
+        Handle any cookie consent popup that might appear
+        """
+        try:
+            cookie_buttons = driver.find_elements(By.XPATH, "//*[contains(text(), 'Accept') or contains(text(), 'I agree')]")
+            for button in cookie_buttons:
+                if button.is_displayed():
+                    button.click()
+                    time.sleep(1)
+                    break
+        except:
+            pass
+
+    @staticmethod
+    def remove_overlays(driver):
+        """
+        Remove any overlay elements that might interfere with clicking
+        """
+        overlay_elements = [
+            "fs-sticky-footer",
+            "cookie-banner",
+            "ad-overlay"
+        ]
+
+        for element_id in overlay_elements:
+            try:
+                element = driver.find_element(By.ID, element_id)
+                driver.execute_script("arguments[0].remove();", element)
+            except:
+                continue
+
+    @staticmethod
+    def safe_click(driver, element):
+        """
+        Try multiple methods to click an element
+        """
+        methods = [
+            lambda: element.click(),
+            lambda: ActionChains(driver).move_to_element(element).click().perform(),
+            lambda: driver.execute_script("arguments[0].click();", element),
+            lambda: driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));", element)
+        ]
+
+        for method in methods:
+            try:
+                method()
+                return True
+            except Exception as e:
+                logger.debug(f"Click method failed: {str(e)}")
+                continue
+        return False
+
+    @classmethod
+    def get_generated_image_url(cls, prompt, max_retries=3):
+        """
+        Generate image from text prompt and return the image URL
+        """
+        driver = None
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                driver = cls.setup_driver()
+                wait = WebDriverWait(driver, 30)
+
+                # Load the page
+                logger.info("Loading website...")
+                driver.get("https://deepai.org/machine-learning-model/text2img")
+                time.sleep(2)  # Allow page to stabilize
+
+                # Handle any popups and overlays
+                cls.handle_cookie_popup(driver)
+                cls.remove_overlays(driver)
+
+                # Enter prompt
+                logger.info(f"Entering prompt: {prompt}")
+                input_field = wait.until(EC.presence_of_element_located(
+                    (By.CLASS_NAME, "model-input-text-input")))
+                input_field.clear()
+                input_field.send_keys(prompt)
+
+                # Find and click submit button
+                logger.info("Attempting to click submit button...")
+                submit_button = wait.until(EC.presence_of_element_located(
+                    (By.ID, "modelSubmitButton")))
+
+                # Scroll button into view
+                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", submit_button)
+                time.sleep(1)
+
+                if not cls.safe_click(driver, submit_button):
+                    raise Exception("Failed to click submit button using all methods")
+
+                # Wait for image generation
+                logger.info("Waiting for image generation...")
+                img_element = wait.until(lambda d: cls.wait_for_image_src(d, (By.CSS_SELECTOR, ".try-it-result-area img")))
+
+                # Get and verify image URL
+                image_url = img_element.get_attribute("src")
+                if not image_url or "api.deepai.org" not in image_url:
+                    raise Exception("Invalid image URL generated")
+
+                logger.info("Successfully generated image")
+                return image_url
+
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"Attempt {retry_count} failed: {str(e)}")
+                if retry_count >= max_retries:
+                    logger.error("Max retries reached")
+                    return None
+                time.sleep(2)  # Wait before retrying
+
+            finally:
+                if driver:
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+
+    @classmethod
+    def handle_request(cls):
+        """
+        Handle the Flask request for image generation
+        """
+        try:
+            data = request.get_json()
+            
+            if not data or 'prompt' not in data:
+                return jsonify({
+                    'error': 'Missing prompt in request body'
+                }), 400
+
+            prompt = data['prompt']
+            image_url = cls.get_generated_image_url(prompt)
+
+            if not image_url:
+                return jsonify({
+                    'error': 'Failed to generate image'
+                }), 500
+
+            return jsonify({
+                'success': True,
+                'image_url': image_url
+            }), 200
+
+        except Exception as e:
+            logger.error(f"Error handling request: {str(e)}")
+            return jsonify({
+                'error': str(e)
+            }), 500
+
+    @classmethod
+    def initialize_server(cls):
+        """
+        Initialize server requirements
+        """
+        try:
+            cls.install_chrome_dependencies()
+            cls.setup_virtual_display()
+            logger.info("Server initialization completed successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize server: {str(e)}")
+            raise
