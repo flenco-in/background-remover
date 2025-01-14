@@ -98,9 +98,6 @@ class ChromeDriverSingleton:
         chrome_options.add_argument("--single-process")
         chrome_options.add_argument("--disable-application-cache")
         
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option("useAutomationExtension", False)
-        
         # Clear Chrome cache
         cache_dir = os.path.expanduser('~/.cache/google-chrome')
         if os.path.exists(cache_dir):
