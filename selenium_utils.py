@@ -121,23 +121,10 @@ class ChromeDriverSingleton:
             driver.set_script_timeout(30)
             driver.set_page_load_timeout(30)
             
-            # Ensure DevTools connection is established
-            try:
-                driver.execute_cdp_cmd("Runtime.enable", {})
-                driver.execute_cdp_cmd("Network.enable", {})
-                driver.execute_cdp_cmd("Page.enable", {})
-                
-                # Set up performance optimizations
-                driver.execute_cdp_cmd("Network.setBypassServiceWorker", {"bypass": True})
-                driver.execute_cdp_cmd('Network.setCacheDisabled', {'cacheDisabled': True})
-                
-                # Verify connection is working
-                driver.execute_script('return navigator.userAgent;')
-            except Exception as e:
-                logger.warning(f"DevTools connection setup failed: {str(e)}")
-                # Try to reconnect if initial connection fails
-                time.sleep(2)
-                driver.execute_cdp_cmd("Runtime.enable", {})
+            # Basic performance settings
+            driver.execute_script("window.onbeforeunload = null;")
+            
+            return driver
             
             return driver
             
