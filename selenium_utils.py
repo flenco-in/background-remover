@@ -41,6 +41,8 @@ class SeleniumImageGenerator:
         chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
+        chrome_options.add_argument("--ignore-certificate-errors")  # Handle SSL issues
+        chrome_options.add_argument("--allow-insecure-localhost")  # Handle localhost SSL issues
 
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
@@ -58,8 +60,8 @@ class SeleniumImageGenerator:
         if self.driver:
             try:
                 self.driver.quit()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error during driver cleanup: {str(e)}")
             finally:
                 self.driver = None
                 self.wait = None
@@ -93,7 +95,7 @@ class SeleniumImageGenerator:
             try:
                 element = self.driver.find_element(By.ID, element_id)
                 self.driver.execute_script("arguments[0].remove();", element)
-            except:
+            except Exception:
                 continue
 
     def safe_click(self, element) -> bool:
@@ -130,124 +132,76 @@ class SeleniumImageGenerator:
                 'api.deepai.org' in parsed.netloc,
                 parsed.path.endswith(('.jpg', '.jpeg', '.png'))
             ])
-        except:
+        except Exception:
             return False
 
     def wait_for_image_src(self, element, timeout: int = 60) -> str:
         """
         Wait for a valid image URL to be available and return it
-        
-        Args:
-            element: The image element to monitor
-            timeout: Maximum time to wait in seconds
-            
-        Returns:
-            str: Valid image URL
-            
-        Raises:
-            TimeoutException: If no valid image URL is found within timeout
         """
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
-                # Check if element is still valid
                 if element.is_displayed():
                     src = element.get_attribute("src")
                     if src and self.is_valid_image_url(src):
                         return src
-                    
-                # If element becomes stale, try to relocate it
-                element = self.wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".try-it-result-area img"))
-                )
             except StaleElementReferenceException:
-                # Relocate the element if it becomes stale
                 element = self.wait.until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".try-it-result-area img"))
                 )
             except Exception as e:
                 logger.debug(f"Waiting for image: {str(e)}")
-            
             time.sleep(1)
-            
         raise TimeoutException("Timeout waiting for valid image URL")
 
     def generate_image(self, prompt: str, max_retries: int = 3) -> Optional[str]:
         """
         Generate image from text prompt and return the image URL
-        
-        Args:
-            prompt (str): The text prompt for image generation
-            max_retries (int): Maximum number of retry attempts
-            
-        Returns:
-            Optional[str]: The generated image URL or None if generation fails
         """
         retry_count = 0
-        last_error = None
         image_url = None
-        
+
         while retry_count < max_retries:
             try:
                 self.setup_driver()
-                
-                # Load the page
                 logger.info("Loading website...")
                 self.driver.get("https://deepai.org/machine-learning-model/text2img")
                 time.sleep(2)
 
-                # Handle any popups and overlays
                 self.handle_cookie_popup()
                 self.remove_overlays()
 
-                # Enter prompt
                 logger.info(f"Entering prompt: {prompt}")
                 input_field = self.wait.until(EC.presence_of_element_located(
                     (By.CLASS_NAME, "model-input-text-input")))
                 input_field.clear()
                 input_field.send_keys(prompt)
 
-                # Find and click submit button
                 logger.info("Attempting to click submit button...")
-                submit_button = self.wait.until(EC.element_to_be_clickable(
-                    (By.ID, "modelSubmitButton")))
-
-                # Scroll button into view
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
-                    submit_button
-                )
+                submit_button = self.wait.until(EC.element_to_be_clickable((By.ID, "modelSubmitButton")))
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", submit_button)
                 time.sleep(1)
 
                 if not self.safe_click(submit_button):
                     raise Exception("Failed to click submit button using all methods")
 
-                # Wait for initial image element
                 logger.info("Waiting for initial image element...")
-                img_element = self.wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".try-it-result-area img"))
-                )
+                img_element = self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".try-it-result-area img")))
 
-                # Wait for valid image URL
                 logger.info("Waiting for valid image URL...")
                 image_url = self.wait_for_image_src(img_element)
 
-                if not image_url or not self.is_valid_image_url(image_url):
-                    raise Exception("Invalid image URL generated")
-
-                logger.info("Successfully generated image")
+                logger.info(f"Successfully generated image: {image_url}")
                 return image_url
 
             except Exception as e:
-                last_error = str(e)
                 retry_count += 1
-                logger.error(f"Attempt {retry_count} failed: {last_error}")
+                logger.error(f"Attempt {retry_count} failed: {str(e)}")
                 if retry_count >= max_retries:
-                    logger.error(f"Max retries reached. Last error: {last_error}")
+                    logger.error("Max retries reached. Returning None.")
                     return None
-                time.sleep(5)  # Increased delay between retries
+                time.sleep(2 ** retry_count)  # Exponential backoff
 
             finally:
-                # Only cleanup after getting the URL or max retries
-                if self.driver and (retry_count >= max_retries or image_url):
-                    self.cleanup()
+                self.cleanup()
