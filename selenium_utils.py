@@ -77,8 +77,8 @@ class ChromeDriverSingleton:
     def _create_driver(cls):
         chrome_options = Options()
         
-        # Server-specific Chrome options
-        chrome_options.add_argument("--headless=new")  # New headless mode
+        # Enhanced server-specific Chrome options
+        chrome_options.add_argument("--headless")  # Use classic headless mode
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -87,9 +87,13 @@ class ChromeDriverSingleton:
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--remote-debugging-port=9222")
+        chrome_options.add_argument("--remote-debugging-port=0")  # Disable debugging port
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        chrome_options.add_argument("--disable-setuid-sandbox")
+        chrome_options.add_argument("--disable-web-security")
+        chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.264 Safari/537.36")
         
         # Memory optimization for server
         chrome_options.add_argument("--memory-pressure-off")
@@ -162,10 +166,27 @@ def get_generated_image_url(prompt):
 
             # Load page
             try:
-                driver.get("https://deepai.org/machine-learning-model/text2img")
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
+                # Set longer page load timeout for server environment
+                driver.set_page_load_timeout(45)
+                
+                # Try loading the page with retry mechanism
+                load_attempts = 3
+                for attempt in range(load_attempts):
+                    try:
+                        driver.get("https://deepai.org/machine-learning-model/text2img")
+                        # Wait for both body and specific content to load
+                        WebDriverWait(driver, 20).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "body"))
+                        )
+                        WebDriverWait(driver, 20).until(
+                            EC.presence_of_element_located((By.CLASS_NAME, "model-input-text-input"))
+                        )
+                        break
+                    except Exception as e:
+                        if attempt == load_attempts - 1:
+                            raise
+                        logger.warning(f"Page load attempt {attempt + 1} failed, retrying...")
+                        time.sleep(3)
             except Exception as e:
                 logger.warning(f"Page load failed: {str(e)}")
                 raise
@@ -277,3 +298,6 @@ def main():
     finally:
         print("\nThank you for using the image generator!")
         ChromeDriverSingleton.quit()
+
+if __name__ == "__main__":
+    main()
