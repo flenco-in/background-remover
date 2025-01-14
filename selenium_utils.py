@@ -31,7 +31,7 @@ class SeleniumImageGenerator:
         Configure Chrome WebDriver with optimized settings
         """
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        # chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -177,6 +177,15 @@ class SeleniumImageGenerator:
                     (By.CLASS_NAME, "model-input-text-input")))
                 input_field.clear()
                 input_field.send_keys(prompt)
+
+                # Click the HD button
+                logger.info("Clicking the HD button...")
+                hd_button = self.wait.until(EC.element_to_be_clickable((By.ID, "modelHdButton")))
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", hd_button)
+                time.sleep(1)
+
+                if not self.safe_click(hd_button):
+                    raise Exception("Failed to click HD button using all methods")
 
                 logger.info("Attempting to click submit button...")
                 submit_button = self.wait.until(EC.element_to_be_clickable((By.ID, "modelSubmitButton")))
