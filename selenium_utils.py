@@ -34,18 +34,15 @@ class ChromeDriverSingleton:
         except FileNotFoundError:
             logger.info("Chrome not found. Installing Chrome...")
             try:
-                # Add Google Chrome repository
                 subprocess.run([
                     'wget', '-q', '-O', '-',
                     'https://dl-ssl.google.com/linux/linux_signing_key.pub',
                     '|', 'sudo', 'apt-key', 'add', '-'
                 ], check=True)
                 
-                # Add repository
                 with open('/etc/apt/sources.list.d/google-chrome.list', 'w') as f:
                     f.write('deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main')
                 
-                # Update and install
                 subprocess.run(['sudo', 'apt-get', 'update'])
                 subprocess.run(['sudo', 'apt-get', 'install', '-y', 'google-chrome-stable'])
                 
@@ -62,7 +59,6 @@ class ChromeDriverSingleton:
     
     @classmethod
     def _is_browser_healthy(cls):
-        """Check if browser instance is healthy"""
         if not cls._instance:
             return False
         try:
@@ -78,7 +74,7 @@ class ChromeDriverSingleton:
         chrome_options = Options()
         
         # Enhanced server-specific Chrome options
-        chrome_options.add_argument("--headless")  # Use classic headless mode
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
@@ -87,7 +83,7 @@ class ChromeDriverSingleton:
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--remote-debugging-port=0")  # Disable debugging port
+        chrome_options.add_argument("--remote-debugging-port=0")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--disable-setuid-sandbox")
         chrome_options.add_argument("--disable-web-security")
@@ -95,7 +91,7 @@ class ChromeDriverSingleton:
         chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.264 Safari/537.36")
         
-        # Memory optimization for server
+        # Memory optimization
         chrome_options.add_argument("--memory-pressure-off")
         chrome_options.add_argument("--single-process")
         chrome_options.add_argument("--disable-application-cache")
@@ -145,67 +141,30 @@ class ChromeDriverSingleton:
                 cls._instance = None
 
 def get_generated_image_url(prompt):
-    """Generate image from text prompt with enhanced error handling"""
+    """Generate image from text prompt and return URL"""
     driver = None
     url = None
     max_retries = 5
     retry_count = 0
-    retry_delay = 2  # Initial delay between retries
+    retry_delay = 2
 
     while retry_count < max_retries and not url:
         try:
             if driver is None:
                 driver = ChromeDriverSingleton.get_instance()
 
-            # Clear browser data on retry
             if retry_count > 0:
                 driver.execute_cdp_cmd('Network.clearBrowserCache', {})
                 driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
                 time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 10)  # Exponential backoff
+                retry_delay = min(retry_delay * 2, 10)
 
-            # Load page
             try:
-                # Set longer page load timeout for server environment
-                driver.set_page_load_timeout(45)
-                
-                # Try loading the page with retry mechanism
-                load_attempts = 3
-                for attempt in range(load_attempts):
-                    try:
-                        driver.get("https://deepai.org/machine-learning-model/text2img")
-                        # Wait for both body and specific content to load
-                        WebDriverWait(driver, 20).until(
-                            EC.presence_of_element_located((By.TAG_NAME, "body"))
-                        )
-                        WebDriverWait(driver, 20).until(
-                            EC.presence_of_element_located((By.CLASS_NAME, "model-input-text-input"))
-                        )
-                        break
-                    except Exception as e:
-                        if attempt == load_attempts - 1:
-                            raise
-                        logger.warning(f"Page load attempt {attempt + 1} failed, retrying...")
-                        time.sleep(3)
-            except Exception as e:
-                logger.warning(f"Page load failed: {str(e)}")
-                raise
-
-            # Optimize page performance
-            driver.execute_script("""
-                window.onbeforeunload = null;
-                window.alert = function(){}; 
-                window.confirm = function(){return true;};
-                window.prompt = function(){return true;};
-            """)
-
-            # Handle input with explicit waits
-            try:
+                driver.get("https://deepai.org/machine-learning-model/text2img")
                 input_field = WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CLASS_NAME, "model-input-text-input"))
                 )
                 
-                # Clear and input text
                 driver.execute_script("arguments[0].value = '';", input_field)
                 driver.execute_script(
                     "arguments[0].value = arguments[1];", 
@@ -217,7 +176,6 @@ def get_generated_image_url(prompt):
                     input_field
                 )
 
-                # Click submit with retry
                 for _ in range(3):
                     try:
                         driver.execute_script(
@@ -227,7 +185,6 @@ def get_generated_image_url(prompt):
                     except:
                         time.sleep(1)
 
-                # Wait for image with enhanced detection
                 start_time = time.time()
                 while time.time() - start_time < 45:
                     url = driver.execute_script("""
@@ -246,7 +203,6 @@ def get_generated_image_url(prompt):
             logger.error(f"Attempt {retry_count + 1} failed: {str(e)}")
             retry_count += 1
             
-            # Reset browser state
             ChromeDriverSingleton.quit()
             driver = None
             
@@ -259,45 +215,5 @@ def get_generated_image_url(prompt):
 
     return url
 
-def save_image_url(url, filename="generated_urls.txt"):
-    """Save the generated image URL to a file"""
-    try:
-        with open(filename, "a") as f:
-            f.write(f"{url}\n")
-        logger.info(f"URL saved to {filename}")
-    except Exception as e:
-        logger.error(f"Failed to save URL: {str(e)}")
-
-def main():
-    try:
-        # Register cleanup
-        atexit.register(ChromeDriverSingleton.quit)
-        
-        while True:
-            prompt = input("\nEnter your image generation prompt (or 'quit' to exit): ")
-            if prompt.lower() in ['quit', 'exit', 'q']:
-                break
-
-            print("\nGenerating image... Please wait...")
-            url = get_generated_image_url(prompt)
-
-            if url:
-                print(f"\nSuccess! Generated image URL: {url}")
-                save_image_url(url)
-            else:
-                print("\nFailed to generate image. Please try again.")
-
-            retry = input("\nGenerate another image? (y/n): ")
-            if retry.lower() != 'y':
-                break
-
-    except KeyboardInterrupt:
-        print("\nProgram terminated by user")
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-    finally:
-        print("\nThank you for using the image generator!")
-        ChromeDriverSingleton.quit()
-
-if __name__ == "__main__":
-    main()
+# Register cleanup handler
+atexit.register(ChromeDriverSingleton.quit)
