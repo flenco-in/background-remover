@@ -4,7 +4,6 @@ import io
 from utils import ImageProcessor
 
 from flask import request, jsonify
-from selenium_utils import get_generated_image_url
 from selenium_utils import SeleniumImageGenerator
 import logging
 
