@@ -28,82 +28,97 @@ def kill_chrome_processes():
     except:
         pass
 
-class ChromeManager:
-    @staticmethod
-    def create_driver():
-        """Create a new Chrome driver instance with minimal memory usage"""
-        kill_chrome_processes()  # Ensure no lingering processes
-        
-        chrome_options = Options()
-        
-        # Essential options only
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        
-        # Memory-specific options
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-software-rasterizer")
-        chrome_options.add_argument("--disable-javascript")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--single-process")
-        chrome_options.add_argument("--ignore-certificate-errors")
-        chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--aggressive-cache-discard")
-        chrome_options.add_argument("--disable-cache")
-        chrome_options.add_argument("--disable-application-cache")
-        chrome_options.add_argument("--disable-offline-load-stale-cache")
-        chrome_options.add_argument("--disk-cache-size=0")
-        chrome_options.add_argument("--disable-background-networking")
-        chrome_options.add_argument("--disable-sync")
-        chrome_options.add_argument("--disable-translate")
-        chrome_options.add_argument("--hide-scrollbars")
-        chrome_options.add_argument("--metrics-recording-only")
-        chrome_options.add_argument("--mute-audio")
-        chrome_options.add_argument("--no-first-run")
-        chrome_options.add_argument("--safebrowsing-disable-auto-update")
-        chrome_options.add_argument("--window-size=1200,900")  # Reduced window size
-        
-        try:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.set_page_load_timeout(30)
-            driver.command_executor._commands["send_command"] = ("POST", '/session/$sessionId/chromium/send_command')
-            return driver
-        except Exception as e:
-            logger.error(f"Failed to create Chrome driver: {str(e)}")
-            raise
+def create_driver():
+    """Create a new Chrome driver instance"""
+    kill_chrome_processes()  # Clean up before creating new instance
+    
+    chrome_options = Options()
+    
+    # Basic settings
+    chrome_options.add_argument('--headless=new')  # Using new headless mode
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    
+    # Memory optimization
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-popup-blocking')
+    chrome_options.add_argument('--window-size=1200,900')
+    
+    # DevTools stability
+    chrome_options.add_argument('--remote-debugging-port=9222')
+    chrome_options.add_argument('--no-startup-window')
+    chrome_options.add_argument('--enable-logging')
+    chrome_options.add_argument('--v=1')
+    
+    # Additional stability options
+    chrome_options.add_argument('--disable-background-networking')
+    chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--disable-sync')
+    chrome_options.add_argument('--disable-translate')
+    chrome_options.add_argument('--metrics-recording-only')
+    chrome_options.add_argument('--mute-audio')
+    chrome_options.add_argument('--no-first-run')
+    
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(30)
+        return driver
+    except Exception as e:
+        logger.error(f"Failed to create Chrome driver: {str(e)}")
+        raise
 
 def get_generated_image_url(prompt, max_retries=3):
-    """Generate image from text prompt with minimal memory usage"""
+    """Generate image from text prompt"""
     for attempt in range(max_retries):
         driver = None
         try:
-            driver = ChromeManager.create_driver()
+            driver = create_driver()
+            logger.info("Chrome driver created successfully")
             
             # Load page
+            logger.info("Loading webpage...")
             driver.get("https://deepai.org/machine-learning-model/text2img")
+            time.sleep(2)  # Allow page to stabilize
             
             # Find and fill input
+            logger.info("Entering prompt...")
             input_field = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "model-input-text-input"))
             )
-            driver.execute_script("arguments[0].value = arguments[1];", input_field, prompt)
             
-            # Click submit
-            submit_button = driver.find_element(By.ID, "modelSubmitButton")
-            driver.execute_script("arguments[0].click();", submit_button)
+            # Use JavaScript to set value and trigger input event
+            driver.execute_script("""
+                arguments[0].value = arguments[1];
+                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+            """, input_field, prompt)
+            
+            # Wait a moment for input to be registered
+            time.sleep(1)
+            
+            # Click submit using JavaScript
+            logger.info("Submitting prompt...")
+            driver.execute_script("""
+                const button = document.getElementById('modelSubmitButton');
+                if (button) button.click();
+            """)
             
             # Wait for result with timeout
+            logger.info("Waiting for image generation...")
             start_time = time.time()
             while time.time() - start_time < 30:
                 try:
-                    img_element = driver.find_element(By.CSS_SELECTOR, ".try-it-result-area img")
-                    url = img_element.get_attribute("src")
-                    if url and "api.deepai.org" in url:
+                    url = driver.execute_script("""
+                        const img = document.querySelector('.try-it-result-area img');
+                        return img && img.src && img.src.includes('api.deepai.org') ? img.src : null;
+                    """)
+                    if url:
+                        logger.info("Image URL generated successfully")
                         return url
                 except:
-                    time.sleep(0.5)
+                    pass
+                time.sleep(0.5)
             
             raise Exception("Timeout waiting for image generation")
             
@@ -119,7 +134,7 @@ def get_generated_image_url(prompt, max_retries=3):
                     driver.quit()
                 except:
                     pass
-            kill_chrome_processes()  # Ensure cleanup
+            kill_chrome_processes()
 
 # Register cleanup on exit
 atexit.register(kill_chrome_processes)
