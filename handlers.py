@@ -2,13 +2,13 @@
 from flask import request, send_file, current_app
 import io
 import logging
+import threading
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import os
 from werkzeug.utils import secure_filename
 import json
-from selenium_utils import SeleniumImageGenerator
 from utils import ImageProcessor
 
 # Configure thread pool for parallel processing
@@ -73,20 +73,9 @@ class BackgroundRemovalHandler:
                 else:
                     image = image.convert('RGB')
 
-                # Get processing parameters
-                shadow_params = json.loads(request.form.get('shadow_params', '{}'))
-                
                 # Process image
                 processed = ImageProcessor.remove_background_enhanced(image)
                 
-                if shadow_params.get('add_shadow'):
-                    processed = ImageProcessor.add_shadow(
-                        processed,
-                        offset=tuple(shadow_params.get('offset', (20, 20))),
-                        blur_radius=shadow_params.get('blur', 30),
-                        shadow_color=tuple(shadow_params.get('color', (0, 0, 0, 120)))
-                    )
-
                 # Save to bytes
                 img_byte_arr = io.BytesIO()
                 processed.save(img_byte_arr, format='PNG', optimize=True)
@@ -97,17 +86,18 @@ class BackgroundRemovalHandler:
             raise
 
 class ImageGenerationHandler:
-    _generator = None
-    _generator_lock = threading.Lock()
+    def __init__(self):
+        self._generator = None
+        self._generator_lock = threading.Lock()
 
-    @classmethod
-    def get_generator(cls):
-        """Singleton pattern for SeleniumImageGenerator with thread safety"""
-        if cls._generator is None:
-            with cls._generator_lock:
-                if cls._generator is None:
-                    cls._generator = SeleniumImageGenerator()
-        return cls._generator
+    def get_generator(self):
+        """Lazy initialization of SeleniumImageGenerator"""
+        if self._generator is None:
+            with self._generator_lock:
+                if self._generator is None:
+                    from selenium_utils import SeleniumImageGenerator
+                    self._generator = SeleniumImageGenerator()
+        return self._generator
 
     @staticmethod
     def handle_request():
@@ -121,7 +111,8 @@ class ImageGenerationHandler:
             if not isinstance(prompt, str) or len(prompt) > 1000:
                 return {'error': 'Invalid prompt'}, 400
 
-            generator = ImageGenerationHandler.get_generator()
+            handler = ImageGenerationHandler()
+            generator = handler.get_generator()
             
             # Generate image with timeout
             future = executor.submit(generator.generate_image, prompt)
