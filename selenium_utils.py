@@ -9,6 +9,8 @@ import time
 import logging
 from typing import Optional
 from urllib.parse import urlparse
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 # Set up logging
 logging.basicConfig(
@@ -28,7 +30,7 @@ class SeleniumImageGenerator:
 
     def setup_driver(self) -> None:
         """
-        Configure Chrome WebDriver with optimized settings
+        Configure Chrome WebDriver with optimized settings and automatic driver management
         """
         chrome_options = Options()
         chrome_options.add_argument("--headless")
@@ -41,16 +43,33 @@ class SeleniumImageGenerator:
         chrome_options.add_argument("--start-maximized")
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--ignore-certificate-errors")  # Handle SSL issues
-        chrome_options.add_argument("--allow-insecure-localhost")  # Handle localhost SSL issues
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.add_argument("--allow-insecure-localhost")
 
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # Use webdriver_manager to automatically download and manage the correct chromedriver
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.driver.set_page_load_timeout(30)
             self.wait = WebDriverWait(self.driver, 30)
-            self.long_wait = WebDriverWait(self.driver, 60)  # Extended timeout for image generation
-        except WebDriverException as e:
-            logger.error(f"Failed to initialize Chrome driver: {str(e)}")
+            self.long_wait = WebDriverWait(self.driver, 60)
+            
+            # Verify Chrome is working
+            self.driver.get("about:blank")
+            logger.info("Chrome driver initialized successfully")
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Failed to initialize Chrome driver: {error_msg}")
+            
+            # Add more detailed error information
+            try:
+                import subprocess
+                chrome_version = subprocess.check_output(['google-chrome', '--version']).decode().strip()
+                logger.error(f"Installed Chrome version: {chrome_version}")
+            except Exception as chrome_check_error:
+                logger.error(f"Could not determine Chrome version: {chrome_check_error}")
+                
             raise
 
     def cleanup(self) -> None:
