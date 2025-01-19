@@ -1,153 +1,74 @@
-# utils.py
-from PIL import Image, ImageFilter
-import numpy as np
+from PIL import Image, ImageColor, ImageOps, ImageFilter
 from rembg import remove
-import io
+import numpy as np
 
 class ImageProcessor:
     @staticmethod
-    def remove_background_enhanced(image: Image.Image) -> Image.Image:
-        """
-        Remove background from image using rembg with enhanced pre/post processing
-        """
-        try:
-            # Convert to bytes for rembg processing
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='PNG')
-            img_byte_arr = img_byte_arr.getvalue()
-
-            # Remove background
-            output = remove(img_byte_arr)
-            
-            # Convert back to PIL Image
-            return Image.open(io.BytesIO(output))
-            
-        except Exception as e:
-            logging.error(f"Background removal error: {str(e)}")
-            raise
-
-    @staticmethod
-    def add_shadow(
-        image: Image.Image,
-        offset: tuple = (20, 20),
-        blur_radius: int = 30,
-        shadow_color: tuple = (0, 0, 0, 120)
-    ) -> Image.Image:
-        """
-        Add a shadow effect to an image with transparency
-        """
-        try:
-            # Ensure image has alpha channel
-            if image.mode != 'RGBA':
-                image = image.convert('RGBA')
-            
-            # Create mask from alpha channel
-            alpha = image.split()[-1]
-            mask = Image.new('RGBA', image.size, (0, 0, 0, 0))
-            shadow = Image.new('RGBA', image.size, shadow_color)
-            
-            # Create shadow mask
-            shadow.putalpha(alpha)
-            
-            # Create output image with space for shadow
-            output = Image.new(
-                'RGBA',
-                (
-                    image.size[0] + abs(offset[0]),
-                    image.size[1] + abs(offset[1])
-                ),
-                (0, 0, 0, 0)
-            )
-            
-            # Apply blur to shadow
-            shadow = shadow.filter(ImageFilter.GaussianBlur(blur_radius))
-            
-            # Compose final image
-            output.paste(
-                shadow,
-                (
-                    max(offset[0], 0),
-                    max(offset[1], 0)
-                ),
-                shadow
-            )
-            output.paste(
-                image,
-                (
-                    max(-offset[0], 0),
-                    max(-offset[1], 0)
-                ),
-                image
-            )
-            
-            return output
-            
-        except Exception as e:
-            logging.error(f"Shadow addition error: {str(e)}")
-            raise
+    def refine_edges(image, alpha_matting_foreground_threshold=240,
+                     alpha_matting_background_threshold=10, alpha_matting_erode_size=5):
+        """Refine edges of the extracted foreground with improved preservation of details."""
+        img_array = np.array(image)
+        rgb = img_array[:, :, :3]
+        alpha = img_array[:, :, 3]
+        
+        # Refine alpha channel
+        alpha_image = Image.fromarray(alpha)
+        alpha_blurred = alpha_image.filter(ImageFilter.GaussianBlur(radius=1))
+        alpha_blurred = np.array(alpha_blurred)
+        alpha_blurred[alpha_blurred < 20] = 0
+        alpha_blurred[alpha_blurred > 240] = 255
+        alpha_feathered = Image.fromarray(alpha_blurred).filter(ImageFilter.GaussianBlur(radius=1))
+        
+        # Combine refined alpha with original RGB
+        refined = np.dstack((rgb, np.array(alpha_feathered)))
+        return Image.fromarray(refined)
 
     @staticmethod
-    def replace_background(
-        image: Image.Image,
-        background: Image.Image or str,
-        resize_method: str = 'cover'
-    ) -> Image.Image:
-        """
-        Replace the background of an image with another image or solid color
-        """
-        try:
-            # Ensure image has alpha channel
-            if image.mode != 'RGBA':
-                image = image.convert('RGBA')
-            
-            # Create background
-            if isinstance(background, str):
-                # Solid color background
-                bg_image = Image.new('RGBA', image.size, background)
-            else:
-                # Image background
-                bg_image = background
-                
-                # Resize background
-                if resize_method == 'cover':
-                    bg_ratio = bg_image.size[0] / bg_image.size[1]
-                    img_ratio = image.size[0] / image.size[1]
-                    
-                    if bg_ratio > img_ratio:
-                        new_width = image.size[0]
-                        new_height = int(new_width / bg_ratio)
-                    else:
-                        new_height = image.size[1]
-                        new_width = int(new_height * bg_ratio)
-                        
-                    bg_image = bg_image.resize(
-                        (new_width, new_height),
-                        Image.Resampling.LANCZOS
-                    )
-                    
-                    # Crop to fit
-                    left = (bg_image.size[0] - image.size[0]) // 2
-                    top = (bg_image.size[1] - image.size[1]) // 2
-                    bg_image = bg_image.crop((
-                        left,
-                        top,
-                        left + image.size[0],
-                        top + image.size[1]
-                    ))
-                else:
-                    # Simple resize
-                    bg_image = bg_image.resize(
-                        image.size,
-                        Image.Resampling.LANCZOS
-                    )
-            
-            # Compose final image
-            result = Image.new('RGBA', image.size, (0, 0, 0, 0))
-            result.paste(bg_image, (0, 0))
-            result.paste(image, (0, 0), image)
-            
-            return result
-            
-        except Exception as e:
-            logging.error(f"Background replacement error: {str(e)}")
-            raise
+    def remove_background_enhanced(image):
+        """Remove the background with edge refinement."""
+        no_bg = remove(
+            image,
+            alpha_matting=True,
+            alpha_matting_foreground_threshold=240,
+            alpha_matting_background_threshold=10,
+            alpha_matting_erode_size=10
+        )
+        return ImageProcessor.refine_edges(no_bg)
+
+    @staticmethod
+    def add_shadow(image, offset=(20, 20), blur_radius=30, shadow_color=(0, 0, 0, 120)):
+        """Add a soft, realistic shadow behind the image."""
+        image = image.convert("RGBA")
+        width, height = image.size
+
+        shadow_layer = Image.new("RGBA", (width + abs(offset[0]), height + abs(offset[1])), (0, 0, 0, 0))
+        alpha = image.split()[3]
+        shadow = Image.new("RGBA", (width, height), shadow_color)
+        
+        shadow_layer.paste(shadow, (max(offset[0], 0), max(offset[1], 0)), mask=alpha)
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(blur_radius))
+        
+        final_image = Image.new("RGBA", shadow_layer.size, (0, 0, 0, 0))
+        final_image.paste(shadow_layer, (0, 0))
+        final_image.paste(image, (max(-offset[0], 0), max(-offset[1], 0)), mask=image.split()[3])
+        
+        return final_image
+
+    @staticmethod
+    def replace_background(foreground, background):
+        """Replace background of an image with optional shadow addition."""
+        foreground = foreground.convert('RGBA')
+        
+        if isinstance(background, Image.Image):
+            background = background.convert('RGBA')
+            background = ImageOps.fit(background, foreground.size, method=Image.Resampling.LANCZOS)
+        elif isinstance(background, str):
+            try:
+                bg_color = ImageColor.getrgb(background)
+                background = Image.new('RGBA', foreground.size, bg_color + (255,))
+            except ValueError:
+                background = Image.new('RGBA', foreground.size, (255, 255, 255, 255))
+        else:
+            background = Image.new('RGBA', foreground.size, (255, 255, 255, 255))
+        
+        return Image.alpha_composite(background, foreground)
